@@ -1,6 +1,6 @@
 # polynomial_commitment_secrete_sharing
 
-> 中文：基于多项式承诺的可验证秘密分享毕业设计项目  
+> 基于多项式承诺的可验证秘密分享毕业设计项目  
 > English: A graduation project on verifiable secret sharing based on polynomial commitments
 
 ## 中文说明
@@ -17,7 +17,7 @@
 
 仓库中的实现以论文 *Efficient polynomial commitment schemes for multiple points and polynomials* 为基础思路，并结合 UTF-8 消息编码、秘密分片和批量验证流程，构造了一个带图形界面的教学型原型系统。
 
-### 这个项目解决了什么问题
+### 解决了什么问题
 
 普通秘密分享只能解决“把秘密拆开再恢复”，但不能天然保证“分发出来的份额是不是和承诺一致”。这个项目在秘密分享之外，又加入了承诺与验证机制，使参与者除了拿到份额以外，还能额外检查：
 
@@ -139,9 +139,9 @@ python secret_clipswithui.py
 
 ![recovery ui](<recovery ui.png>)
 
-### 适合阅读代码时先看的文件
+### 
 
-如果你准备从代码角度理解整个项目，建议按下面顺序阅读：
+建议按下面顺序阅读：
 
 1. `main_withui_finally.py`
 2. `message_coding.py`
@@ -163,11 +163,6 @@ python secret_clipswithui.py
 - Boneh et al., *Efficient polynomial commitment schemes for multiple points and polynomials*  
   [https://eprint.iacr.org/2020/081](https://eprint.iacr.org/2020/081)
 
-### 致谢
-
-这个项目完成于本科毕业设计阶段。原 README 里那种“要出发去下一段人生”的感觉我保留下来了，只是把主体说明整理得更适合公开仓库阅读。
-
-出发吧，不管去到哪里，继续温柔、缓慢而坚定地前进。
 
 ## English Overview
 
