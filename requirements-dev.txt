@@ -1,0 +1,4 @@
+pytest>=7
+# Only needed to run the legacy comparison tests in tests/test_legacy_regressions.py
+numpy
+sympy

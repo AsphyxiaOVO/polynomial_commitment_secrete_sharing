@@ -1,235 +1,130 @@
 # polynomial_commitment_secrete_sharing
 
-> 基于多项式承诺的可验证秘密分享毕业设计项目  
-> English: A graduation project on verifiable secret sharing based on polynomial commitments
+> 基于多项式承诺思路的可验证秘密分享 —— 毕业设计原型（重构版）
+> English: A teaching / research prototype of verifiable secret sharing inspired by polynomial commitments
 
-## 中文说明
+**⚠️ 这是教学与研究原型，不是生产级密码系统。** 使用素数 p = 2^255 − 19 并不意味着整个协议具备生产级安全性；
+其中的"承诺值"是普通多项式求值，不具备 KZG 等标准承诺方案的隐藏性 / 绑定性。详见 [已知限制](#已知限制)。
 
-### 项目简介
+## 项目简介
 
-本项目对应 `2025` 年海南大学本科毕业设计《基于多项式承诺的可验证秘密分享》。
+本项目对应 2025 年海南大学本科毕业设计《基于多项式承诺的可验证秘密分享》，以
+Boneh et al., *Efficient polynomial commitment schemes for multiple points and polynomials*
+([ePrint 2020/081](https://eprint.iacr.org/2020/081)) 的多点、多多项式批量验证思路为基础，结合：
 
-项目的核心目标是把下面三部分结合起来：
+- UTF-8 消息分片与 Shamir 门限秘密分享；
+- 多项式求值、见证生成与代数一致性验证；
+- FRI 风格降幂（独立研究原型）。
 
-- 多项式承诺（Polynomial Commitment）
-- FRI 风格的降幂处理
-- 秘密分享与恢复
+本分支（`refactor/core-validation-tests`）在**不改变研究思路**的前提下，把算法从 Tkinter GUI 中拆分为可测试的
+`pcss` 包，修复了原实现中的正确性问题，并补充了输入校验与单元测试。原始代码完整保留在 [`legacy/`](legacy/)。
+原实现的分析与问题清单见 [`docs/ANALYSIS.md`](docs/ANALYSIS.md)。
 
-仓库中的实现以论文 *Efficient polynomial commitment schemes for multiple points and polynomials* 为基础思路，并结合 UTF-8 消息编码、秘密分片和批量验证流程，构造了一个带图形界面的教学型原型系统。
+## 流程
 
-### 解决了什么问题
+1. **编码**：消息 → UTF-8 字节 → 每 31 字节一个分片（末片右侧补 `\x00`）→ `int.from_bytes(…, "big")`。
+   因为 2^248 < p，每个分片都是合法的域元素。
+2. **秘密分享**：每个分片 `s_j` 作为多项式 `f_j` 的常数项；系统按门限 k 固定 `deg f_j = k − 1`，其余系数随机生成
+   （`secrets.randbelow`）。参与者 x 的份额为 `(x, [f_1(x), …, f_m(x)])`。
+3. **证明者初始化**：对每个 `f_i` 和点集 `S_i ⊆ T` 求插值多项式 `r_i`。
+4. **分发与见证**：验证者给出 `(x, y)`，证明者返回 `cm_i = f_i(x)`（即份额值）与见证
+   `W = Σ y^i · ((f_i − r_i)/Z_{S_i})(x)`。
+5. **验证**：检查 `W·Z_T(x) == Σ (cm_i − r_i(x))·y^i·Z_{T\S_i}(x)`。
+6. **恢复**：≥ k 个份额 → 拉格朗日插值求 `f_j(0)` → 按 `original_length` 去除填充 → UTF-8 解码。
 
-普通秘密分享只能解决“把秘密拆开再恢复”，但不能天然保证“分发出来的份额是不是和承诺一致”。这个项目在秘密分享之外，又加入了承诺与验证机制，使参与者除了拿到份额以外，还能额外检查：
+三个参数互相独立，不可混淆：**`chunk_count`**（分片数 = 多项式个数，由消息字节长度决定）、
+**`share_count` n**（参与者 / 份额数）、**`threshold` k**（恢复门限）。
 
-- 证明者是否真的按同一组多项式在分发
-- 承诺值、见证值和插值结果是否彼此一致
-- 恢复出的秘密是否能重新解码成原始消息
+## 目录结构
 
-### 核心思路
+```
+pcss/                 核心算法（无 GUI 依赖，仅标准库）
+  config.py           FIELD_MODULUS = 2**255 - 19, CHUNK_SIZE = 31, 资源上限
+  errors.py           异常层级（输入错误均为 ValueError 子类）
+  field.py            GF(p) 运算、模逆
+  polynomial.py       多项式运算（系数统一为低→高）、除法、插值
+  encoding.py         消息 ↔ 31 字节分片
+  sharing.py          门限分享 (d = k − 1) 与恢复
+  commitment.py       Prover / Verifier（论文中的批量验证等式）
+  fri.py              FRI 风格降幂研究原型（不作用于分享多项式）
+  vss.py              端到端流程 DealerSession
+gui/                  Tkinter 薄界面（只做输入/显示）
+  dealer_app.py       证明者初始化、分发份额与见证、验证
+  recovery_app.py     载入 JSON 份额并恢复秘密
+  parsing.py          界面文本解析（可单测）
+tests/                pytest 单元测试（含与 legacy 实现的对照 / 回归测试）
+examples/demo.py      命令行演示
+legacy/               原始实现（未修改）
+docs/                 分析文档、原界面截图
+```
 
-整个流程可以按下面 6 步理解：
+## 快速开始
 
-1. 将输入消息按 `UTF-8` 编码成一个大整数。
-2. 将这个整数拆成多个常数片段，分别嵌入多项式的常数项中。
-3. 对高次多项式执行 FRI 风格的降幂处理，把次数压到较小范围内。
-4. 在每个多项式对应的点集 `S_i` 上求值，并插值得到辅助多项式 `r_i(x)`。
-5. 证明者在用户选定的 `x` 处生成承诺值 `cm_i`，再结合挑战值 `y` 生成见证 `W`。
-6. 验证者检查左右两边是否相等，从而判断承诺与证明是否成立；之后也可以基于门限份额做秘密恢复。
+需要 Python 3.9+。核心包只依赖标准库。
 
-### 代码里实际对应的验证关系
+```bash
+pip install -r requirements-dev.txt   # pytest；numpy/sympy 仅用于 legacy 对照测试
+python -m pytest                       # 运行全部测试
+python examples/demo.py                # 命令行演示
+python -m gui.dealer_app               # 证明者 / 验证者界面
+python -m gui.recovery_app             # 秘密恢复界面
+```
 
-从 `main_withui_finally.py` 的实现来看，验证阶段实际比较的是：
+代码中使用：
 
-- 左边：`F_left = W * Z_T(x)`
-- 右边：`F_right = Σ_i (cm_i - r_i(x)) * y^i * Z_i(x)`
+```python
+from pcss import DealerSession, Verifier, recover_message
 
-如果两边相等，就判定验证成功。
+session = DealerSession.create("你好 🌸", threshold=3, share_count=5, point_sets=[[0, 7, 9]])
+verifier = Verifier(session.public_parameters())
 
-这也是 README 里最值得强调的一点：本项目不是只做“分片”，而是做“带承诺与验证的分片”。
+share, opening = session.open_share(x=1, y=12345)   # y 为验证者的挑战值
+assert verifier.verify_opening(opening).valid
 
-### 创新点
+print(recover_message(session.shares[:3], session.metadata))   # -> "你好 🌸"
+```
 
-1. 对待分享多项式加入 FRI 风格的降幂处理，使多项式次数保持在较可控的范围内，进而控制承诺和证明的复杂度。
-2. 不把整条消息直接塞进单个多项式，而是先编码、再拆分到多个多项式的常数项里，增强秘密分享过程中的灵活性。
-3. 保留了多点评估、多多项式批量验证的思路，使承诺与验证过程更适合做“可验证”的秘密分享演示。
-4. 提供了两个独立的 Tkinter 图形界面，分别负责“承诺/验证”和“秘密恢复”，更适合课程展示。
+## 主要改动
 
-### 仓库结构
-
-| 文件 | 说明 |
+| 任务 | 内容 |
 | --- | --- |
-| `main_withui_finally.py` | 主界面程序：初始化证明者、分发承诺值、生成见证、执行验证 |
-| `secret_clipswithui.py` | 秘密恢复界面：输入门限份额、拉格朗日插值、恢复常数并解码消息 |
-| `FRI.py` | FRI 风格降幂逻辑，将高次项拆分并折叠 |
-| `message_coding.py` | 消息编码、整数拆分、整数合并与解码 |
-| `polynomial_division.py` | 有限域下的多项式除法 |
-| `rxi.py` | 根据点集做有限域插值，求出辅助多项式系数 |
-| `commitment ui.png` | 承诺界面截图 |
-| `verification.png` | 验证结果截图 |
-| `recovery ui.png` | 恢复界面截图 |
+| A 门限 | 系统根据 k 固定 `d = k − 1`；校验 `k ≥ 2`、`n ≥ k`、`n < p`、份额数 ≥ k、x 互不相同且非 0、值属于 GF(p)、每份额值个数 = `chunk_count`；门限写入元数据，恢复时不从点数推断次数 |
+| B 有限域 | 统一 `FIELD_MODULUS = 2**255 - 19`；纯 Python 整数实现取模、模逆、Horner 求值、多项式除法和拉格朗日插值（替换 NumPy/SymPy 实现）；设置资源上限 |
+| C 编码 | 31 字节定长分片 + 元数据 `original_length / chunk_size / chunk_count / threshold`；空消息编码为 1 个全零分片、`original_length = 0` |
+| D 验证 | 保留原证明者 / 验证者算法；修复空点集、除法非法输入、重复点、不可逆元素、系数顺序、次数判断；拒绝 `S_i ⊄ T`、`x ∈ T`、`y = 0` |
+| 解耦 | 算法移入 `pcss`；GUI 改为薄界面，只捕获 `PCSSError`，不再使用宽泛的 `except Exception` |
+| FRI | 与门限冲突（降低次数、改变常数项），保留为独立研究原型，不应用于秘密分享多项式 |
 
-### 运行环境
+## 已知限制
 
-推荐使用 `Python 3.9+`，依赖如下：
+- **不是标准密码学承诺**：`cm_i = f_i(x)` 不隐藏也不绑定。知道 `r_i` 的人可以为任意 `cm'` 构造通过验证的 `W'`
+  （见 `tests/test_commitment.py::test_forged_consistent_pair_is_accepted_documented_limitation`）。
+  因此当前方案**不能检测任意份额篡改**；已测试能识别的是：错误见证、配合诚实见证的篡改份额值、退化的验证点。
+- **`r_i` 会泄露秘密**：原设计要求 `0 ∈ S_i`，于是 `r_i(0) = f_i(0)` 即秘密分片。`r_i` 只能交给可信验证方；
+  可用 `require_zero_in_point_sets=False` 关闭此规则，但这偏离了原论文实现。
+- **恢复时的篡改检测有限**：份额多于 k 时用冗余份额做一致性检查；恰好 k 个时无法保证发现篡改。
+- **FRI** 仅是研究原型，不是完整的 FRI 低次测试协议，也不参与秘密分享。
+- 未提供安全性证明；随机数来自 `secrets`，但未做常数时间实现等工程防护。
 
-```bash
-pip install numpy sympy
-```
+## 参考文献
 
-说明：
+- D. Boneh, J. Drake, B. Fisch, A. Gabizon. *Efficient polynomial commitment schemes for multiple points and polynomials.*
+  [ePrint 2020/081](https://eprint.iacr.org/2020/081)
 
-- `tkinter` 通常随标准 Python 一起安装。
-- 如果你的 Python 环境没有图形界面支持，需要额外安装对应系统组件。
-
-### 使用方式
-
-#### 1. 运行承诺与验证界面
-
-```bash
-python main_withui_finally.py
-```
-
-界面中主要包含两部分操作：
-
-- 初始化证明者
-- 添加验证者并执行验证
-
-初始化证明者时，需要填写：
-
-- `多项式数量`
-- `有限域`
-- `点集 T`
-- 每个多项式对应的 `S` 和系数
-- 需要编码的消息
-
-需要注意：
-
-- 每行输入格式是 `S;coefficients`
-- `S` 中必须包含 `0`
-- 当前代码限制 `len(S) <= 6`
-- 系数输入为“从高到低”，且**不包含常数项**
-- 常数项会在程序内部被替换成拆分后的秘密片段
-
-#### 2. 运行秘密恢复界面
-
-```bash
-python secret_clipswithui.py
-```
-
-这个界面用于：
-
-- 输入多项式数量、有限域、门限 `k`
-- 填写每份 share 的 `x` 和每个多项式对应的 `y`
-- 使用拉格朗日插值恢复常数项
-- 合并整数并解码回原始消息
-
-### 界面截图
-
-保留仓库中的原始图片如下。
-
-#### 承诺界面
-
-![commitment ui](<commitment ui.png>)
-
-#### 验证结果
-
-![verification](verification.png)
-
-#### 恢复界面
-
-![recovery ui](<recovery ui.png>)
-
-### 
-
-建议按下面顺序阅读：
-
-1. `main_withui_finally.py`
-2. `message_coding.py`
-3. `FRI.py`
-4. `rxi.py`
-5. `secret_clipswithui.py`
-
-这样会比较容易先理解“消息如何进入多项式”，再理解“承诺如何验证”，最后理解“秘密如何恢复”。
-
-### 注意事项
-
-- 当前实现更适合课程设计、论文复现和原型演示，不是面向生产环境的完整密码系统。
-- 有限域运算默认建立在模数可逆的前提上，实际使用时更适合选素数域。
-- `FRI.py` 中的降幂策略是项目里的工程化改写，用于控制次数，不等同于完整工业级 FRI 协议实现。
-- 界面交互和参数检查以演示为主，复杂输入场景下仍建议结合代码阅读使用。
-
-### 参考文献
-
-- Boneh et al., *Efficient polynomial commitment schemes for multiple points and polynomials*  
-  [https://eprint.iacr.org/2020/081](https://eprint.iacr.org/2020/081)
-
+---
 
 ## English Overview
 
-### Summary
+A refactored teaching/research prototype of verifiable secret sharing:
 
-This repository is a graduation-project prototype for **verifiable secret sharing based on polynomial commitments**.
+- **`pcss` package** (standard library only): GF(p) arithmetic with p = 2^255 − 19, polynomial utilities
+  (low-to-high coefficients), 31-byte message chunking, Shamir sharing with degree fixed to k − 1,
+  the thesis' batched evaluation check `W·Z_T(x) = Σ (cm_i − r_i(x))·y^i·Z_{T\S_i}(x)`, and an FRI-style folding prototype.
+- **Validation**: threshold/share-count bounds, distinct non-zero x-coordinates, field-range checks,
+  `S_i ⊆ T`, `x ∉ T`, `y ≠ 0`, resource limits; explicit exception hierarchy.
+- **Tests**: ~200 pytest cases (≈98 % line coverage of `pcss`), including regression tests that reproduce bugs of the
+  original code in `legacy/` and equivalence tests showing the refactored algebra matches it.
+- **Limitations**: the "commitments" are plain evaluations (neither hiding nor binding); forged consistent
+  (cm', W') pairs pass; r_i reveals the secret when 0 ∈ S_i. Not production cryptography.
 
-It combines:
-
-- polynomial commitments,
-- FRI-style degree reduction,
-- message sharding,
-- and threshold-based secret recovery.
-
-The implementation is inspired by *Efficient polynomial commitment schemes for multiple points and polynomials*, while adapting the workflow to a GUI-based educational prototype.
-
-### Main Workflow
-
-1. Encode the input message into a large integer using UTF-8.
-2. Split that integer into several constant fragments.
-3. Embed the fragments into the constant terms of multiple polynomials.
-4. Reduce high polynomial degrees with an FRI-style folding step.
-5. Generate commitments and a witness for selected verifier inputs.
-6. Recover the secret later with threshold shares and decode the original message.
-
-### Verification Equation Used in Code
-
-The implementation in `main_withui_finally.py` verifies:
-
-- `F_left = W * Z_T(x)`
-- `F_right = Σ_i (cm_i - r_i(x)) * y^i * Z_i(x)`
-
-Verification succeeds when both sides are equal.
-
-### Repository Structure
-
-| File | Purpose |
-| --- | --- |
-| `main_withui_finally.py` | GUI for prover initialization, commitment generation, witness generation, and verification |
-| `secret_clipswithui.py` | GUI for secret recovery and message decoding |
-| `FRI.py` | FRI-style degree-reduction logic |
-| `message_coding.py` | Message encoding, splitting, merging, and decoding |
-| `polynomial_division.py` | Polynomial division over a finite field |
-| `rxi.py` | Finite-field interpolation from point sets |
-
-### Quick Start
-
-Install dependencies:
-
-```bash
-pip install numpy sympy
-```
-
-Run the commitment / verification UI:
-
-```bash
-python main_withui_finally.py
-```
-
-Run the secret recovery UI:
-
-```bash
-python secret_clipswithui.py
-```
-
-### Notes
-
-- This project is best understood as a teaching and prototype implementation.
-- It is suitable for thesis demonstration, algorithm explanation, and code reading.
-- The included screenshots are preserved from the original repository content.
+Run `python -m pytest`, `python examples/demo.py`, `python -m gui.dealer_app`, `python -m gui.recovery_app`.
