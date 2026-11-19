@@ -1,4 +1,6 @@
+-r requirements.txt
 pytest>=7
+httpx>=0.27
 # Only needed to run the legacy comparison tests in tests/test_legacy_regressions.py
 numpy
 sympy

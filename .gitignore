@@ -8,3 +8,8 @@ venv/
 *.egg-info/
 .coverage
 htmlcov/
+# local demo database and environment files (may contain secrets)
+*.db
+*.sqlite3
+.env
+.env.*

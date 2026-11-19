@@ -111,3 +111,42 @@ W·Z_T(x) = Σ_i (cm_i − r_i(x))·y^i·Z_{T\S_i}(x)
 | 通用多项式 / FRI 输入 | ≤ 1024 个系数（折叠轮数 ≤ 10，必然终止） |
 
 所有坐标、份额值、挑战值都必须是 `[0, p)` 内的整数（拒绝 `bool`、浮点数、负数和 ≥ p 的值）。
+
+## 6. 第二轮验证结论（算法验证 / API 阶段）
+
+### 6.1 对第一阶段修复的复核
+
+| 项目 | 结论 |
+| --- | --- |
+| 门限、输入校验、固定模数、大整数运算、31 字节分片、元数据 | 均存在且测试通过 |
+| 默认分享流程的随机数 | **已修正**：原 `split_secret` 允许注入 `randbelow` 与手动 `coefficients`。现在默认路径只用 `secrets.randbelow`；手动系数拆为 `split_secret_with_coefficients`（仅研究 / 调试，API 不使用）。测试检查核心代码不导入 `random`、每个分片多项式独立、最高次项非零 |
+| `Prover.open` | 小改：先校验 (x, y) 再求值 |
+
+### 6.2 验证者能否在不访问 f_i 系数的情况下独立验证？
+
+**代数上可以**：`Verifier` 只需要 S_i、T、r_i 和 (x, y, cm, W)，从不接触 f_i
+（`test_verifier_needs_only_public_parameters`）。
+
+**但所需的"公开参数"本身就泄露信息**（这是被保留协议的性质，而不是实现缺陷）：
+
+1. r_i 是 f_i 在 S_i 上的插值，等价于 |S_i| 个 f_i 的取值；若 0 ∈ S_i（原 GUI 规则），r_i(0) 就是秘密分片
+   （`test_finding_public_r_reveals_secret_when_zero_in_point_set`）。
+2. 见证同样泄露：单分片时 r(x) = cm − W·Z_S(x)（`test_finding_witness_reveals_r_at_share_point`）；
+   多分片时用不同 y 的多个证明可以解出每个 r_i(x)（`test_finding_multiple_challenges_separate_chunks`）。
+3. 实际影响：0 ∈ S_i 时 |S_i| 个持有证明的参与者即可恢复秘密（k = 4、S = {0, 7} 时 2 人即可）；
+   0 ∉ S_i 时每个证明泄露 f_i 在 S_i 上的值，等价于额外的份额，共谋门限从 k 降到 k − |S_i|。
+
+所缺的并不是"某个公开参数"，而是一个对 f_i 具有隐藏性与绑定性的承诺（如基于群元素的 KZG 承诺），
+那属于协议替换，不在本阶段范围内。
+
+### 6.3 API 中采取的缓解与取舍
+
+* API 不使用 0 ∈ S_i，而是 S_i = T = {p − 1}（单点、远离份额坐标 1…n），把泄露降到每个分片 1 个取值。
+* r_i（`task_verification_keys`）与 f_i（`task_secrets`）都只存在服务端，任何接口都不返回；验证在服务端
+  用同一个 `Verifier` 完成。
+* 证明只能在已分发份额的坐标上生成（在新 x 上开放等于发放新份额）。
+* 推荐按 `proof_id` 验证，W 不必交给参与者；若把证明数据交给参与者，k = 2 时单个参与者即可恢复秘密
+  （`test_finding_proof_given_to_participant_lowers_threshold`，通过真实 API 演示）。
+* 单分片消息时唯一权重是 y⁰ = 1，挑战值 y 对 W 无影响（`test_single_chunk_challenge_has_no_effect`）。
+* "评估一致性证明"≠"份额有效性证明"：验证通过只说明 (cm, W) 与服务端的 r_i 一致，不能证明份额位于
+  同一个 k − 1 次多项式上（`test_evaluation_consistency_is_not_share_validity`）。

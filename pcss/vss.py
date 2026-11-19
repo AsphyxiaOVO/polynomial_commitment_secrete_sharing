@@ -27,7 +27,7 @@ from . import field
 from .commitment import Opening, Prover, PublicParameters, validate_point_sets
 from .encoding import expected_chunk_count
 from .errors import ProtocolError, ValidationError
-from .sharing import RandBelow, Share, SharingMetadata, split_secret
+from .sharing import Share, SharingMetadata, split_secret
 
 P = field.P
 
@@ -43,9 +43,7 @@ class DealerSession:
                point_sets: Sequence[Sequence[int]],
                evaluation_set: Optional[Sequence[int]] = None, *,
                x_coordinates: Optional[Sequence[int]] = None,
-               coefficients: Optional[Sequence[Sequence[int]]] = None,
-               require_zero_in_point_sets: bool = True,
-               randbelow: Optional[RandBelow] = None) -> "DealerSession":
+               require_zero_in_point_sets: bool = True) -> "DealerSession":
         """Create shares and the prover.
 
         ``point_sets`` holds one S_i per chunk polynomial; a single point set is
@@ -70,7 +68,7 @@ class DealerSession:
                                         require_zero=require_zero_in_point_sets)
 
         sharing = split_secret(message, threshold, share_count, x_coordinates=x_coordinates,
-                               coefficients=coefficients, excluded_x=t, randbelow=randbelow)
+                               excluded_x=t)
         prover = Prover(sharing.polynomials, sets_t, t,
                         require_zero_in_point_sets=require_zero_in_point_sets)
         return cls(metadata=sharing.metadata, shares=sharing.shares, prover=prover)

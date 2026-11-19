@@ -18,6 +18,15 @@ The threshold is stored in :class:`SharingMetadata` when the shares are
 created.  Recovery never tries to infer the degree from the number of
 supplied points: it requires at least ``metadata.threshold`` shares.
 
+Randomness
+----------
+The default entry point :func:`split_secret` draws every random coefficient
+with :func:`secrets.randbelow` (a CSPRNG); the ``random`` module is never
+used, and callers cannot supply coefficients.  Each chunk gets its own,
+independently sampled polynomial.  :func:`split_secret_with_coefficients`
+exists only for research / debugging (deterministic examples, legacy-style
+manual input) and is not used by the application layer.
+
 FRI-style degree reduction is intentionally **not** applied here, because
 folding changes both the degree and the constant term of f_j and would break
 the threshold property; see ``pcss/fri.py``.
@@ -27,19 +36,15 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass, field as dc_field
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import field, polynomial
 from .config import CHUNK_SIZE, MAX_SHARE_COUNT, MAX_THRESHOLD, MIN_THRESHOLD
-from .encoding import decode_message, encode_message, validate_encoding_metadata
+from .encoding import EncodedMessage, decode_message, encode_message, validate_encoding_metadata
 from .errors import (DuplicatePointError, InconsistentSharesError, InsufficientSharesError,
                      ValidationError)
 
 P = field.P
-
-#: ``randbelow(n)`` must return a uniformly random int in [0, n).  Defaults to
-#: :func:`secrets.randbelow`; tests inject a seeded generator for reproducibility.
-RandBelow = Callable[[int], int]
 
 
 # --------------------------------------------------------------------------- #
@@ -192,51 +197,25 @@ def build_sharing_polynomial(secret: int, threshold: int,
     return [secret, *coeffs]
 
 
-def random_sharing_polynomial(secret: int, threshold: int,
-                              randbelow: Optional[RandBelow] = None) -> List[int]:
-    """Sample a_1..a_{k-2} uniformly from GF(p) and a_{k-1} uniformly from GF(p)*."""
-    rb = randbelow or secrets.randbelow
-    middle = [rb(P) for _ in range(threshold - 2)]
-    leading = rb(P - 1) + 1
+def random_sharing_polynomial(secret: int, threshold: int) -> List[int]:
+    """CSPRNG polynomial: a_1..a_{k-2} uniform in GF(p), a_{k-1} uniform in GF(p)* (degree = k - 1)."""
+    middle = [secrets.randbelow(P) for _ in range(threshold - 2)]
+    leading = secrets.randbelow(P - 1) + 1
     return build_sharing_polynomial(secret, threshold, [*middle, leading])
 
 
-def split_secret(message: str, threshold: int, share_count: int, *,
-                 x_coordinates: Optional[Sequence[int]] = None,
-                 coefficients: Optional[Sequence[Sequence[int]]] = None,
-                 excluded_x: Iterable[int] = (),
-                 randbelow: Optional[RandBelow] = None) -> SharingResult:
-    """Encode ``message`` and create ``share_count`` shares with recovery threshold ``threshold``.
-
-    ``coefficients`` (optional, teaching/test mode): one list of exactly k - 1
-    non-constant coefficients (low-to-high) per chunk.  When omitted, the
-    coefficients are sampled with ``randbelow`` (default ``secrets.randbelow``).
-    ``excluded_x`` lets the commitment layer forbid share x-coordinates that lie
-    in its evaluation set T.
-    """
-    validate_sharing_parameters(threshold, share_count)
-    excluded = list(excluded_x)
+def _resolve_x_coordinates(share_count: int, x_coordinates: Optional[Sequence[int]],
+                           excluded: List[int]) -> List[int]:
     if x_coordinates is None:
-        xs = default_x_coordinates(share_count, excluded)
-    else:
-        xs = validate_x_coordinates(x_coordinates, excluded=excluded)
-        if len(xs) != share_count:
-            raise ValidationError(
-                f"expected {share_count} x-coordinates, got {len(xs)}")
+        return default_x_coordinates(share_count, excluded)
+    xs = validate_x_coordinates(x_coordinates, excluded=excluded)
+    if len(xs) != share_count:
+        raise ValidationError(f"expected {share_count} x-coordinates, got {len(xs)}")
+    return xs
 
-    encoded = encode_message(message)
-    if coefficients is not None and len(coefficients) != encoded.chunk_count:
-        raise ValidationError(
-            f"expected coefficients for {encoded.chunk_count} chunk polynomials, "
-            f"got {len(coefficients)}")
 
-    polys: List[List[int]] = []
-    for j, secret in enumerate(encoded.chunks):
-        if coefficients is None:
-            polys.append(random_sharing_polynomial(secret, threshold, randbelow))
-        else:
-            polys.append(build_sharing_polynomial(secret, threshold, coefficients[j]))
-
+def _build_result(encoded: EncodedMessage, threshold: int, share_count: int, xs: Sequence[int],
+                  polys: Sequence[Sequence[int]]) -> SharingResult:
     shares = tuple(
         Share(x=x, values=tuple(polynomial.evaluate(f, x) for f in polys)) for x in xs)
     metadata = SharingMetadata(threshold=threshold, share_count=share_count,
@@ -244,6 +223,45 @@ def split_secret(message: str, threshold: int, share_count: int, *,
                                chunk_count=encoded.chunk_count, chunk_size=encoded.chunk_size)
     return SharingResult(metadata=metadata, shares=shares,
                          polynomials=tuple(tuple(f) for f in polys))
+
+
+def split_secret(message: str, threshold: int, share_count: int, *,
+                 x_coordinates: Optional[Sequence[int]] = None,
+                 excluded_x: Iterable[int] = ()) -> SharingResult:
+    """Encode ``message`` and create ``share_count`` shares with recovery threshold ``threshold``.
+
+    Default (and only production-style) path: one independent CSPRNG
+    polynomial of degree exactly k - 1 per chunk.  ``x_coordinates`` defaults to
+    1..n (skipping ``excluded_x``); ``excluded_x`` lets the commitment layer
+    forbid share x-coordinates that lie in its evaluation set T.
+    """
+    validate_sharing_parameters(threshold, share_count)
+    xs = _resolve_x_coordinates(share_count, x_coordinates, list(excluded_x))
+    encoded = encode_message(message)
+    polys = [random_sharing_polynomial(secret, threshold) for secret in encoded.chunks]
+    return _build_result(encoded, threshold, share_count, xs, polys)
+
+
+def split_secret_with_coefficients(message: str, threshold: int, share_count: int,
+                                   coefficients: Sequence[Sequence[int]], *,
+                                   x_coordinates: Optional[Sequence[int]] = None,
+                                   excluded_x: Iterable[int] = ()) -> SharingResult:
+    """RESEARCH / DEBUG ONLY: share with caller-chosen coefficients.
+
+    ``coefficients`` holds, per chunk, exactly k - 1 non-constant coefficients
+    (low-to-high, leading one non-zero), so the threshold relation d = k - 1 is
+    still enforced.  Not exposed by the REST API.
+    """
+    validate_sharing_parameters(threshold, share_count)
+    xs = _resolve_x_coordinates(share_count, x_coordinates, list(excluded_x))
+    encoded = encode_message(message)
+    if len(coefficients) != encoded.chunk_count:
+        raise ValidationError(
+            f"expected coefficients for {encoded.chunk_count} chunk polynomials, "
+            f"got {len(coefficients)}")
+    polys = [build_sharing_polynomial(secret, threshold, coefficients[j])
+             for j, secret in enumerate(encoded.chunks)]
+    return _build_result(encoded, threshold, share_count, xs, polys)
 
 
 # --------------------------------------------------------------------------- #

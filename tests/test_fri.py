@@ -63,13 +63,13 @@ def test_reduce_degree_input_validation():
         fri.fold_consistency_holds([1, 2], [1], 3, 0)
 
 
-def test_fri_breaks_shamir_threshold(randbelow):
+def test_fri_breaks_shamir_threshold():
     """Documents why FRI is NOT applied to the sharing polynomials.
 
     For k = 8 the sharing polynomial has degree 7.  After one fold:
     degree 3 (only 4 points determine it) and the constant term changes.
     """
-    result = split_secret("FRI vs threshold", 8, 8, randbelow=randbelow)
+    result = split_secret("FRI vs threshold", 8, 8)
     f = list(result.polynomials[0])
     assert polynomial.degree(f) == 7
     g = fri.fold(f, fri.FRI_DEFAULT_ALPHA)

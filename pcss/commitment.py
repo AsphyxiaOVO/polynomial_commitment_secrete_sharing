@@ -193,6 +193,7 @@ class Prover:
         return total
 
     def open(self, x: int, y: int) -> Opening:
+        x, y = validate_challenge(x, y, self._evaluation_set)  # validate before evaluating anything
         return Opening(x=x, y=y, commitments=self.commitments(x), witness=self.witness(x, y))
 
 

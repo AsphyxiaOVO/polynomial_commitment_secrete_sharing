@@ -27,8 +27,8 @@ def test_parse_int_list_and_point_sets():
         parse_point_sets("\n \n")
 
 
-def test_bundle_round_trip(randbelow):
-    result = split_secret("导出 / インポート 🔁", 2, 3, randbelow=randbelow)
+def test_bundle_round_trip():
+    result = split_secret("导出 / インポート 🔁", 2, 3)
     meta, shares = bundle_from_json(bundle_to_json(result.metadata, result.shares))
     assert meta == result.metadata and shares == list(result.shares)
     assert recover_message(shares[1:], meta) == "导出 / インポート 🔁"
