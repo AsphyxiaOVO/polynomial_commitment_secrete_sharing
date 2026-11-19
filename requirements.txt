@@ -1,0 +1,6 @@
+# Runtime dependencies of the REST API (the pcss core and GUI need only the standard library).
+fastapi>=0.110
+uvicorn>=0.27
+sqlalchemy>=2.0
+pyjwt>=2.8
+python-multipart>=0.0.9
